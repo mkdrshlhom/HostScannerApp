@@ -1,0 +1,632 @@
+name: Build Host Scanner Pro Plus
+
+on: workflow_dispatch
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        run: |
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-*.zip
+          rm commandlinetools-linux-*.zip
+          echo "ANDROID_HOME=$HOME/android-sdk" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$HOME/android-sdk" >> $GITHUB_ENV
+          yes | $HOME/android-sdk/cmdline-tools/cmdline-tools/bin/sdkmanager --licenses
+          $HOME/android-sdk/cmdline-tools/cmdline-tools/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Create project
+        run: |
+          mkdir -p app/src/main/java/com/example/hostscanner
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle << 'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "HostScanner"
+          include ':app'
+          EOF
+
+          cat > build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.20' apply false
+          }
+          EOF
+
+          cat > app/build.gradle << 'EOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'com.example.hostscanner'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.example.hostscanner"
+                  minSdk 21
+                  targetSdk 34
+                  versionCode 3
+                  versionName "3.0"
+              }
+              buildFeatures { viewBinding true }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+              kotlinOptions {
+                  jvmTarget = "1.8"
+              }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.10.0'
+              implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+              implementation 'androidx.recyclerview:recyclerview:1.3.1'
+              implementation 'com.google.code.gson:gson:2.10.1'
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+              <application android:allowBackup="true" android:label="Host Scanner Pro"
+                  android:theme="@style/Theme.AppCompat.Light.DarkActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/strings.xml << 'EOF'
+          <resources>
+              <string name="app_name">Host Scanner Pro</string>
+          </resources>
+          EOF
+
+          # ========== واجهة محسنة مع قسم المنافذ و DNS ==========
+          cat > app/src/main/res/layout/activity_main.xml << 'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:padding="16dp">
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical">
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="🌐 فاحص المواقع والمنافذ و DNS"
+                      android:textSize="20sp"
+                      android:textStyle="bold"
+                      android:layout_marginBottom="16dp"/>
+
+                  <!-- قسم إضافة المواقع وفحصها -->
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="📋 إدارة المواقع"
+                      android:textStyle="bold"
+                      android:layout_marginBottom="8dp"/>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal">
+
+                      <EditText
+                          android:id="@+id/etNewHost"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:hint="أدخل رابط (http://...)"
+                          android:inputType="textUri"/>
+
+                      <Button
+                          android:id="@+id/btnAdd"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:text="➕ إضافة"
+                          android:layout_marginStart="4dp"/>
+                  </LinearLayout>
+
+                  <Button
+                      android:id="@+id/btnScanAll"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="🔍 افحص جميع المواقع"
+                      android:layout_marginTop="8dp"/>
+
+                  <ProgressBar
+                      android:id="@+id/progressBarHosts"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_gravity="center"
+                      android:visibility="gone"/>
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="مواقعك المضافة:"
+                      android:textStyle="bold"
+                      android:layout_marginTop="8dp"/>
+
+                  <androidx.recyclerview.widget.RecyclerView
+                      android:id="@+id/recyclerViewHosts"
+                      android:layout_width="match_parent"
+                      android:layout_height="200dp"
+                      android:layout_marginTop="4dp"/>
+
+                  <TextView
+                      android:id="@+id/tvScanStatus"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text=""
+                      android:textSize="14sp"/>
+
+                  <LinearLayout
+                      android:id="@+id/resultsContainerHosts"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="vertical"
+                      android:layout_marginTop="4dp"/>
+
+                  <!-- فاصل -->
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="@android:color/darker_gray"
+                      android:layout_marginVertical="16dp"/>
+
+                  <!-- قسم فحص المنافذ -->
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="🔌 فحص المنافذ (Port Scan)"
+                      android:textStyle="bold"
+                      android:layout_marginBottom="8dp"/>
+
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal">
+
+                      <EditText
+                          android:id="@+id/etTargetHost"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:hint="عنوان IP أو نطاق"
+                          android:inputType="textUri"/>
+
+                      <EditText
+                          android:id="@+id/etPortRange"
+                          android:layout_width="0dp"
+                          android:layout_height="wrap_content"
+                          android:layout_weight="1"
+                          android:hint="منافذ (80,443 أو 1-100)"
+                          android:inputType="text"
+                          android:layout_marginStart="8dp"/>
+                  </LinearLayout>
+
+                  <Button
+                      android:id="@+id/btnScanPorts"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="🔍 افحص المنافذ"
+                      android:layout_marginTop="8dp"/>
+
+                  <ProgressBar
+                      android:id="@+id/progressBarPorts"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_gravity="center"
+                      android:visibility="gone"/>
+
+                  <TextView
+                      android:id="@+id/tvPortResult"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text=""
+                      android:textSize="14sp"
+                      android:layout_marginTop="4dp"/>
+
+                  <!-- قسم فحص DNS -->
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="@android:color/darker_gray"
+                      android:layout_marginVertical="16dp"/>
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="🌍 فحص DNS"
+                      android:textStyle="bold"
+                      android:layout_marginBottom="8dp"/>
+
+                  <EditText
+                      android:id="@+id/etDnsHost"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:hint="أدخل اسم النطاق (مثلاً google.com)"
+                      android:inputType="textUri"/>
+
+                  <Button
+                      android:id="@+id/btnDnsLookup"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="🔍 استعلام DNS"
+                      android:layout_marginTop="8dp"/>
+
+                  <ProgressBar
+                      android:id="@+id/progressBarDns"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:layout_gravity="center"
+                      android:visibility="gone"/>
+
+                  <TextView
+                      android:id="@+id/tvDnsResult"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text=""
+                      android:textSize="14sp"
+                      android:layout_marginTop="4dp"/>
+
+              </LinearLayout>
+          </ScrollView>
+          EOF
+
+          # ========== الكود الكامل للنشاط الرئيسي ==========
+          cat > app/src/main/java/com/example/hostscanner/MainActivity.kt << 'KOTLIN'
+          package com.example.hostscanner
+
+          import android.content.Context
+          import android.os.Bundle
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
+          import com.google.gson.Gson
+          import com.google.gson.reflect.TypeToken
+          import kotlinx.coroutines.*
+          import okhttp3.OkHttpClient
+          import okhttp3.Request
+          import java.net.InetAddress
+          import java.net.InetSocketAddress
+          import java.net.Socket
+          import java.util.concurrent.TimeUnit
+
+          class MainActivity : AppCompatActivity() {
+
+              // عناصر الواجهة للمواقع
+              private lateinit var etNewHost: EditText
+              private lateinit var btnAdd: Button
+              private lateinit var btnScanAll: Button
+              private lateinit var progressBarHosts: ProgressBar
+              private lateinit var recyclerView: RecyclerView
+              private lateinit var tvScanStatus: TextView
+              private lateinit var resultsContainerHosts: LinearLayout
+
+              // عناصر المنافذ
+              private lateinit var etTargetHost: EditText
+              private lateinit var etPortRange: EditText
+              private lateinit var btnScanPorts: Button
+              private lateinit var progressBarPorts: ProgressBar
+              private lateinit var tvPortResult: TextView
+
+              // عناصر DNS
+              private lateinit var etDnsHost: EditText
+              private lateinit var btnDnsLookup: Button
+              private lateinit var progressBarDns: ProgressBar
+              private lateinit var tvDnsResult: TextView
+
+              private val hostsList = mutableListOf<String>()
+              private lateinit var adapter: HostAdapter
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  // ربط عناصر المواقع
+                  etNewHost = findViewById(R.id.etNewHost)
+                  btnAdd = findViewById(R.id.btnAdd)
+                  btnScanAll = findViewById(R.id.btnScanAll)
+                  progressBarHosts = findViewById(R.id.progressBarHosts)
+                  recyclerView = findViewById(R.id.recyclerViewHosts)
+                  tvScanStatus = findViewById(R.id.tvScanStatus)
+                  resultsContainerHosts = findViewById(R.id.resultsContainerHosts)
+
+                  // ربط عناصر المنافذ
+                  etTargetHost = findViewById(R.id.etTargetHost)
+                  etPortRange = findViewById(R.id.etPortRange)
+                  btnScanPorts = findViewById(R.id.btnScanPorts)
+                  progressBarPorts = findViewById(R.id.progressBarPorts)
+                  tvPortResult = findViewById(R.id.tvPortResult)
+
+                  // ربط عناصر DNS
+                  etDnsHost = findViewById(R.id.etDnsHost)
+                  btnDnsLookup = findViewById(R.id.btnDnsLookup)
+                  progressBarDns = findViewById(R.id.progressBarDns)
+                  tvDnsResult = findViewById(R.id.tvDnsResult)
+
+                  loadHosts()
+
+                  adapter = HostAdapter(hostsList, object : HostAdapter.OnItemActionListener {
+                      override fun onDelete(position: Int) {
+                          hostsList.removeAt(position)
+                          saveHosts()
+                          adapter.notifyItemRemoved(position)
+                      }
+                  })
+
+                  recyclerView.layoutManager = LinearLayoutManager(this)
+                  recyclerView.adapter = adapter
+
+                  // إضافة موقع
+                  btnAdd.setOnClickListener {
+                      val newHost = etNewHost.text.toString().trim()
+                      if (newHost.isEmpty()) {
+                          Toast.makeText(this, "الرجاء إدخال رابط", Toast.LENGTH_SHORT).show()
+                          return@setOnClickListener
+                      }
+                      val finalHost = if (!newHost.startsWith("http")) "http://$newHost" else newHost
+                      hostsList.add(0, finalHost)
+                      saveHosts()
+                      adapter.notifyItemInserted(0)
+                      etNewHost.text.clear()
+                      recyclerView.scrollToPosition(0)
+                  }
+
+                  // فحص كل المواقع
+                  btnScanAll.setOnClickListener {
+                      if (hostsList.isEmpty()) {
+                          Toast.makeText(this, "أضف مواقع أولاً", Toast.LENGTH_SHORT).show()
+                          return@setOnClickListener
+                      }
+                      startHostScan()
+                  }
+
+                  // فحص المنافذ
+                  btnScanPorts.setOnClickListener {
+                      startPortScan()
+                  }
+
+                  // استعلام DNS
+                  btnDnsLookup.setOnClickListener {
+                      startDnsLookup()
+                  }
+              }
+
+              private fun loadHosts() {
+                  val prefs = getSharedPreferences("host_scanner_prefs", Context.MODE_PRIVATE)
+                  val json = prefs.getString("saved_hosts", null)
+                  if (json != null) {
+                      val type = object : TypeToken<MutableList<String>>() {}.type
+                      val savedList: MutableList<String> = Gson().fromJson(json, type)
+                      hostsList.clear()
+                      hostsList.addAll(savedList)
+                  } else {
+                      hostsList.addAll(listOf(
+                          "http://0.facebook.com",
+                          "http://m.facebook.com",
+                          "http://freebasics.com",
+                          "http://ar.wikipedia.org"
+                      ))
+                  }
+              }
+
+              private fun saveHosts() {
+                  val prefs = getSharedPreferences("host_scanner_prefs", Context.MODE_PRIVATE)
+                  val json = Gson().toJson(hostsList)
+                  prefs.edit().putString("saved_hosts", json).apply()
+              }
+
+              private fun startHostScan() {
+                  progressBarHosts.visibility = View.VISIBLE
+                  tvScanStatus.text = "⏳ جاري فحص المواقع..."
+                  resultsContainerHosts.removeAllViews()
+
+                  CoroutineScope(Dispatchers.Main).launch {
+                      val client = OkHttpClient.Builder()
+                          .connectTimeout(3, TimeUnit.SECONDS)
+                          .readTimeout(3, TimeUnit.SECONDS)
+                          .followRedirects(false)
+                          .build()
+
+                      for (url in hostsList) {
+                          val result = withContext(Dispatchers.IO) {
+                              try {
+                                  val request = Request.Builder().url(url).head().build()
+                                  val response = client.newCall(request).execute()
+                                  if (response.isSuccessful) "✅ $url (${response.code})"
+                                  else "❌ $url (${response.code})"
+                              } catch (e: Exception) {
+                                  "❌ $url (فشل)"
+                              }
+                          }
+                          resultsContainerHosts.addView(TextView(this@MainActivity).apply {
+                              text = result
+                              textSize = 14f
+                              setPadding(4, 4, 4, 4)
+                          })
+                      }
+
+                      progressBarHosts.visibility = View.GONE
+                      tvScanStatus.text = "✅ اكتمل فحص المواقع"
+                  }
+              }
+
+              private fun startPortScan() {
+                  val target = etTargetHost.text.toString().trim()
+                  val portInput = etPortRange.text.toString().trim()
+
+                  if (target.isEmpty() || portInput.isEmpty()) {
+                      Toast.makeText(this, "أدخل العنوان والمنافذ", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+
+                  // تحليل نطاق المنافذ (مفردة أو مدى)
+                  val ports = mutableListOf<Int>()
+                  try {
+                      if (portInput.contains("-")) {
+                          val parts = portInput.split("-")
+                          val start = parts[0].trim().toInt()
+                          val end = parts[1].trim().toInt()
+                          for (p in start..end) ports.add(p)
+                      } else {
+                          portInput.split(",").forEach { s ->
+                              ports.add(s.trim().toInt())
+                          }
+                      }
+                  } catch (e: Exception) {
+                      Toast.makeText(this, "صيغة المنافذ غير صحيحة", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+
+                  progressBarPorts.visibility = View.VISIBLE
+                  tvPortResult.text = ""
+
+                  CoroutineScope(Dispatchers.Main).launch {
+                      val results = StringBuilder()
+                      for (port in ports) {
+                          val isOpen = withContext(Dispatchers.IO) {
+                              try {
+                                  val socket = Socket()
+                                  socket.connect(InetSocketAddress(target, port), 1500)
+                                  socket.close()
+                                  true
+                              } catch (e: Exception) {
+                                  false
+                              }
+                          }
+                          val status = if (isOpen) "✅ مفتوح" else "❌ مغلق"
+                          results.append("المنفذ $port: $status\n")
+                          tvPortResult.text = results.toString()
+                      }
+                      progressBarPorts.visibility = View.GONE
+                      if (results.isEmpty()) tvPortResult.text = "لا توجد منافذ محددة."
+                  }
+              }
+
+              private fun startDnsLookup() {
+                  val host = etDnsHost.text.toString().trim()
+                  if (host.isEmpty()) {
+                      Toast.makeText(this, "أدخل اسم النطاق", Toast.LENGTH_SHORT).show()
+                      return
+                  }
+
+                  progressBarDns.visibility = View.VISIBLE
+                  tvDnsResult.text = ""
+
+                  CoroutineScope(Dispatchers.Main).launch {
+                      val result = withContext(Dispatchers.IO) {
+                          try {
+                              val addresses = InetAddress.getAllByName(host)
+                              val ips = addresses.joinToString("\n") { it.hostAddress }
+                              "✅ تم العثور على:\n$ips"
+                          } catch (e: Exception) {
+                              "❌ فشل الاستعلام: ${e.message}"
+                          }
+                      }
+                      tvDnsResult.text = result
+                      progressBarDns.visibility = View.GONE
+                  }
+              }
+          }
+
+          class HostAdapter(
+              private val items: List<String>,
+              private val listener: OnItemActionListener
+          ) : RecyclerView.Adapter<HostAdapter.ViewHolder>() {
+
+              interface OnItemActionListener {
+                  fun onDelete(position: Int)
+              }
+
+              inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+                  val tvHost: TextView = view.findViewById(android.R.id.text1)
+                  val btnDelete: Button = view.findViewById(android.R.id.button1)
+              }
+
+              override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+                  val layout = LinearLayout(parent.context).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(8, 8, 8, 8)
+                  }
+                  val tv = TextView(parent.context).apply {
+                      id = android.R.id.text1
+                      textSize = 16f
+                      layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                  }
+                  val btn = Button(parent.context).apply {
+                      id = android.R.id.button1
+                      text = "🗑️"
+                      layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                  }
+                  layout.addView(tv)
+                  layout.addView(btn)
+                  return ViewHolder(layout)
+              }
+
+              override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+                  holder.tvHost.text = items[position]
+                  holder.btnDelete.setOnClickListener {
+                      listener.onDelete(position)
+                  }
+              }
+
+              override fun getItemCount() = items.size
+          }
+          KOTLIN
+
+      - name: Set up Gradle Wrapper
+        run: |
+          wget -q https://services.gradle.org/distributions/gradle-8.5-bin.zip
+          unzip -q gradle-8.5-bin.zip
+          export PATH=$PWD/gradle-8.5/bin:$PATH
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+
+      - name: Build with Gradle
+        run: |
+          echo "android.useAndroidX=true" > gradle.properties
+          unset ANDROID_HOME
+          export ANDROID_HOME=$HOME/android-sdk
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hostscanner-pro-plus
+          path: app/build/outputs/apk/debug/app-debug.apk
